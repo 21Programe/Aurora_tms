@@ -1,0 +1,314 @@
+from aurora_tms_mvp import (
+    Caminhao,
+    Carga,
+    ViagemService,
+    CargaService,
+    Motorista,
+    STATUS_CAMINHAO_DISPONIVEL,
+    STATUS_CARGA_PATIO,
+    STATUS_MOTORISTA_DISPONIVEL,
+)
+from sqlalchemy.orm import Session
+from typing import List, Dict, Any, Optional
+from collections import defaultdict
+from datetime import datetime
+
+from aurora_tms_mvp import (
+    Caminhao,
+    Carga,
+    STATUS_CAMINHAO_DISPONIVEL,
+    STATUS_CARGA_PATIO,
+)
+
+
+class PastorSalmo23:
+    """
+    Motor de discernimento logístico inspirado em direção, ordem e provisão.
+
+    Estratégia:
+    - agrupa cargas por destino
+    - prioriza destinos por força logística
+    - pontua cargas por prazo + valor + peso
+    - tenta maximizar ocupação sem misturar destinos
+    """
+
+    @staticmethod
+    def _buscar_frota_disponivel(db: Session) -> List[Caminhao]:
+        return (
+            db.query(Caminhao)
+            .filter(Caminhao.status == STATUS_CAMINHAO_DISPONIVEL)
+            .order_by(Caminhao.capacidade_max_kg.desc())
+            .all()
+        )
+
+    @staticmethod
+    def _buscar_cargas_patio(db: Session) -> List[Carga]:
+        return (
+            db.query(Carga)
+            .filter(Carga.status == STATUS_CARGA_PATIO)
+            .order_by(Carga.peso_kg.desc())
+            .all()
+        )
+
+    @staticmethod
+    def _horas_para_prazo(carga: Carga) -> float:
+        if not carga.prazo_entrega:
+            return 999999
+        delta = carga.prazo_entrega - datetime.now()
+        return delta.total_seconds() / 3600
+
+    @staticmethod
+    def _score_urgencia(carga: Carga) -> float:
+        horas = PastorSalmo23._horas_para_prazo(carga)
+
+        if horas <= 0:
+            return 100.0
+        if horas <= 6:
+            return 95.0
+        if horas <= 12:
+            return 85.0
+        if horas <= 24:
+            return 70.0
+        if horas <= 48:
+            return 45.0
+        return 15.0
+
+    @staticmethod
+    def _score_valor(carga: Carga) -> float:
+        valor = carga.valor_mercadoria or 0.0
+
+        if valor >= 100000:
+            return 100.0
+        if valor >= 50000:
+            return 80.0
+        if valor >= 20000:
+            return 55.0
+        if valor >= 5000:
+            return 30.0
+        return 10.0
+
+    @staticmethod
+    def _score_peso(carga: Carga) -> float:
+        peso = carga.peso_kg or 0.0
+
+        if peso >= 10000:
+            return 100.0
+        if peso >= 7000:
+            return 80.0
+        if peso >= 4000:
+            return 55.0
+        if peso >= 1500:
+            return 30.0
+        return 10.0
+
+    @staticmethod
+    def _score_carga(carga: Carga) -> float:
+        urgencia = PastorSalmo23._score_urgencia(carga)
+        valor = PastorSalmo23._score_valor(carga)
+        peso = PastorSalmo23._score_peso(carga)
+
+        # peso maior para urgência, depois valor, depois massa
+        score = (urgencia * 0.50) + (valor * 0.30) + (peso * 0.20)
+        return round(score, 2)
+
+    @staticmethod
+    def _agrupar_cargas_por_destino(cargas: List[Carga]) -> Dict[str, List[Carga]]:
+        grupos = defaultdict(list)
+        for carga in cargas:
+            grupos[carga.cidade_destino].append(carga)
+
+        for destino in grupos:
+            grupos[destino].sort(
+                key=lambda c: (
+                    PastorSalmo23._score_carga(c),
+                    c.peso_kg
+                ),
+                reverse=True
+            )
+
+        return grupos
+
+    @staticmethod
+    def _forca_destino(cargas: List[Carga]) -> float:
+        return round(sum(PastorSalmo23._score_carga(c) for c in cargas), 2)
+
+    @staticmethod
+    def _ordenar_destinos(cargas_por_destino: Dict[str, List[Carga]]) -> List[str]:
+        return sorted(
+            cargas_por_destino.keys(),
+            key=lambda destino: PastorSalmo23._forca_destino(cargas_por_destino[destino]),
+            reverse=True
+        )
+
+    @staticmethod
+    def _classificar_rota(ocupacao_pct: float) -> str:
+        if ocupacao_pct >= 85:
+            return "Pastos Verdes"
+        if ocupacao_pct >= 50:
+            return "Vale da Sombra"
+        return "Mesa Preparada"
+
+    @staticmethod
+    def _montar_rota_para_caminhao(
+        caminhao: Caminhao,
+        cargas_por_destino: Dict[str, List[Carga]],
+        cargas_alocadas_ids: set
+    ) -> Optional[Dict[str, Any]]:
+        melhor_plano = None
+        destinos_priorizados = PastorSalmo23._ordenar_destinos(cargas_por_destino)
+
+        for destino in destinos_priorizados:
+            capacidade_restante = caminhao.capacidade_max_kg
+            cargas_escolhidas = []
+
+            for carga in cargas_por_destino[destino]:
+                if carga.id in cargas_alocadas_ids:
+                    continue
+
+                if carga.peso_kg <= capacidade_restante:
+                    cargas_escolhidas.append(carga)
+                    capacidade_restante -= carga.peso_kg
+
+            if not cargas_escolhidas:
+                continue
+
+            peso_total = sum(c.peso_kg for c in cargas_escolhidas)
+            valor_total = sum(c.valor_mercadoria or 0 for c in cargas_escolhidas)
+            score_total = sum(PastorSalmo23._score_carga(c) for c in cargas_escolhidas)
+            ocupacao_pct = (peso_total / caminhao.capacidade_max_kg) * 100 if caminhao.capacidade_max_kg > 0 else 0
+
+            plano = {
+                "caminhao_id": caminhao.id,
+                "caminhao": caminhao.placa,
+                "tipo": caminhao.tipo,
+                "destino": destino,
+                "capacidade_total_kg": round(caminhao.capacidade_max_kg, 2),
+                "peso_ocupado_kg": round(peso_total, 2),
+                "peso_livre_kg": round(capacidade_restante, 2),
+                "ocupacao_pct": round(ocupacao_pct, 1),
+                "valor_total_mercadoria": round(valor_total, 2),
+                "score_total_rota": round(score_total, 2),
+                "classificacao_rota": PastorSalmo23._classificar_rota(ocupacao_pct),
+                "total_cargas": len(cargas_escolhidas),
+                "cargas_recomendadas": [
+                    {
+                        "id": c.id,
+                        "nf": c.nota_fiscal,
+                        "descricao": c.descricao,
+                        "peso_kg": round(c.peso_kg, 2),
+                        "valor_mercadoria": round(c.valor_mercadoria or 0, 2),
+                        "score": PastorSalmo23._score_carga(c),
+                        "prazo_entrega": c.prazo_entrega.isoformat() if c.prazo_entrega else None,
+                    }
+                    for c in cargas_escolhidas
+                ],
+            }
+
+            if melhor_plano is None:
+                melhor_plano = plano
+            else:
+                # prefere maior score total; em empate, maior ocupação
+                if (
+                    plano["score_total_rota"] > melhor_plano["score_total_rota"]
+                    or (
+                        plano["score_total_rota"] == melhor_plano["score_total_rota"]
+                        and plano["ocupacao_pct"] > melhor_plano["ocupacao_pct"]
+                    )
+                ):
+                    melhor_plano = plano
+
+        return melhor_plano
+
+    @staticmethod
+    def gerar_plano_tatico(db: Session) -> Dict[str, Any]:
+        caminhoes = PastorSalmo23._buscar_frota_disponivel(db)
+        cargas_patio = PastorSalmo23._buscar_cargas_patio(db)
+
+        if not caminhoes:
+            return {
+                "status": "erro",
+                "mensagem": "Nenhum caminhão disponível. A frota não está pronta para receber direção.",
+                "referencia": "Salmo 23 aplicado à prontidão operacional",
+            }
+
+        if not cargas_patio:
+            return {
+                "status": "erro",
+                "mensagem": "O pátio está em paz. Nenhuma carga aguarda direção.",
+                "referencia": "Nada me faltará — operação limpa",
+            }
+
+        cargas_por_destino = PastorSalmo23._agrupar_cargas_por_destino(cargas_patio)
+        cargas_alocadas_ids = set()
+        plano_execucao = []
+
+        for caminhao in caminhoes:
+            plano = PastorSalmo23._montar_rota_para_caminhao(
+                caminhao,
+                cargas_por_destino,
+                cargas_alocadas_ids
+            )
+
+            if plano:
+                plano_execucao.append(plano)
+                for item in plano["cargas_recomendadas"]:
+                    cargas_alocadas_ids.add(item["id"])
+
+        cargas_pendentes = [c for c in cargas_patio if c.id not in cargas_alocadas_ids]
+
+        peso_total_patio = sum(c.peso_kg for c in cargas_patio)
+        peso_total_alocado = sum(rota["peso_ocupado_kg"] for rota in plano_execucao)
+        aproveitamento_global = (
+            (peso_total_alocado / peso_total_patio) * 100 if peso_total_patio > 0 else 0
+        )
+
+        valor_total_alocado = sum(rota["valor_total_mercadoria"] for rota in plano_execucao)
+        destinos_cobertos = sorted({rota["destino"] for rota in plano_execucao})
+
+        return {
+            "status": "sucesso",
+            "mensagem": "Plano gerado com direção, ordem e prioridade operacional.",
+            "tema": "Salmo 23 - Guia Operacional",
+            "resumo": {
+                "caminhoes_analisados": len(caminhoes),
+                "rotas_sugeridas": len(plano_execucao),
+                "cargas_no_patio": len(cargas_patio),
+                "cargas_alocadas": len(cargas_alocadas_ids),
+                "cargas_pendentes": len(cargas_pendentes),
+                "peso_total_patio_kg": round(peso_total_patio, 2),
+                "peso_total_alocado_kg": round(peso_total_alocado, 2),
+                "valor_total_alocado": round(valor_total_alocado, 2),
+                "aproveitamento_global_pct": round(aproveitamento_global, 1),
+                "destinos_cobertos": destinos_cobertos,
+            },
+            "rotas_sugeridas": plano_execucao,
+            "cargas_pendentes_detalhes": [
+                {
+                    "id": c.id,
+                    "nf": c.nota_fiscal,
+                    "descricao": c.descricao,
+                    "destino": c.cidade_destino,
+                    "peso_kg": round(c.peso_kg, 2),
+                    "valor_mercadoria": round(c.valor_mercadoria or 0, 2),
+                    "score": PastorSalmo23._score_carga(c),
+                }
+                for c in cargas_pendentes
+            ],
+            "palavra_operacional": (
+                "Ainda que a operação atravesse vales de pressão, "
+                "a direção correta reduz perdas e conduz a frota ao melhor caminho."
+            ),
+        }
+
+
+if __name__ == "__main__":
+    from aurora_tms_mvp import SessionLocal
+    import json
+
+    db = SessionLocal()
+    try:
+        print("\n[PASTOR SALMO 23] Buscando os melhores caminhos para a operação...\n")
+        resultado = PastorSalmo23.gerar_plano_tatico(db)
+        print(json.dumps(resultado, indent=2, ensure_ascii=False))
+    finally:
+        db.close()
