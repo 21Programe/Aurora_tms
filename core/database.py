@@ -1,20 +1,10 @@
-from sqlalchemy import create_engine
-from sqlalchemy.orm import declarative_base, sessionmaker
-from aurora_tms_mvp import Base, engine, SessionLocal
+"""Infraestrutura de persistência do Aurora TMS.
 
-__all__ = ["Base", "engine", "SessionLocal"]
+A implementação histórica do domínio permanece em legacy enquanto o
+projeto evolui para módulos separados. Esta camada centraliza a importação
+do mesmo engine, SessionLocal e Base usados pelo restante da aplicação.
+"""
 
-SQLALCHEMY_DATABASE_URL = "sqlite:///./aurora_tms.db"
+from legacy.aurora_tms_mvp import Base, SessionLocal, engine
 
-engine = create_engine(
-    SQLALCHEMY_DATABASE_URL,
-    connect_args={"check_same_thread": False},
-)
-
-SessionLocal = sessionmaker(
-    autocommit=False,
-    autoflush=False,
-    bind=engine,
-)
-
-Base = declarative_base()
+__all__ = ["Base", "SessionLocal", "engine"]
