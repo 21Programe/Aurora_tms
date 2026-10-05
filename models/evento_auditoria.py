@@ -1,3 +1,3 @@
-from legacy.aurora_tms_mvp import CustoViagem
+from legacy.aurora_tms_mvp import EventoAuditoria
 
-__all__ = ["CustoViagem"]
+__all__ = ["EventoAuditoria"]
