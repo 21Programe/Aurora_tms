@@ -297,6 +297,81 @@ class PastorSalmo23:
         }
 
 
+    @staticmethod
+    def executar_plano_tatico(
+        db: Session,
+        origem_padrao: str = "Pátio Central",
+        iniciar_viagens: bool = False,
+    ) -> Dict[str, Any]:
+        """Transforma recomendações do Oráculo em viagens e reservas."""
+        plano = PastorSalmo23.gerar_plano_tatico(db)
+        if plano.get("status") != "sucesso":
+            return plano
+
+        motoristas = (
+            db.query(Motorista)
+            .filter(Motorista.status == STATUS_MOTORISTA_DISPONIVEL)
+            .order_by(Motorista.id.asc())
+            .all()
+        )
+        viagens_criadas = []
+        erros = []
+
+        for indice, rota in enumerate(plano["rotas_sugeridas"]):
+            if indice >= len(motoristas):
+                erros.append(
+                    f"Sem motorista disponível para {rota['caminhao']} -> {rota['destino']}."
+                )
+                continue
+
+            motorista = motoristas[indice]
+            try:
+                viagem = ViagemService.criar(
+                    db=db,
+                    origem=origem_padrao.strip() or "Pátio Central",
+                    destino=rota["destino"],
+                    distancia_km=0,
+                    caminhao_id=rota["caminhao_id"],
+                    motorista_id=motorista.id,
+                    observacoes="Gerada pelo Oráculo Logístico.",
+                )
+
+                cargas_reservadas = []
+                for item in rota["cargas_recomendadas"]:
+                    CargaService.reservar_para_viagem(
+                        db,
+                        carga_id=item["id"],
+                        viagem_id=viagem.id,
+                    )
+                    cargas_reservadas.append(item["id"])
+
+                if iniciar_viagens:
+                    ViagemService.iniciar(db, viagem.id)
+
+                viagens_criadas.append({
+                    "viagem_id": viagem.id,
+                    "codigo": viagem.codigo,
+                    "destino": viagem.destino,
+                    "status": viagem.status,
+                    "caminhao_id": viagem.caminhao_id,
+                    "motorista_id": motorista.id,
+                    "cargas_reservadas": cargas_reservadas,
+                })
+            except Exception as exc:
+                erros.append(
+                    f"Falha ao executar {rota['caminhao']} -> {rota['destino']}: {exc}"
+                )
+
+        return {
+            "status": "sucesso" if viagens_criadas else "erro",
+            "mensagem": "Plano tático processado.",
+            "total_viagens_criadas": len(viagens_criadas),
+            "total_erros": len(erros),
+            "viagens_criadas": viagens_criadas,
+            "erros": erros,
+        }
+
+
 if __name__ == "__main__":
     from legacy.aurora_tms_mvp import SessionLocal
     import json
