@@ -3,7 +3,7 @@ from typing import List, Dict, Any, Optional
 from collections import defaultdict
 from datetime import datetime
 
-from aurora_tms_mvp import (
+from legacy.aurora_tms_mvp import (
     Caminhao,
     Carga,
     Motorista,
