@@ -33,14 +33,14 @@ import os
 #
 # Como rodar:
 #   pip install sqlalchemy
-#   python aurora_tms_mvp.py
+#   python -m legacy.aurora_tms_mvp
 # ============================================================
 
 
 # ============================================================
 # CONFIGURAÇÃO DO BANCO DE DADOS
 # ============================================================
-SQLALCHEMY_DATABASE_URL = "sqlite:///./aurora_tms.db"
+SQLALCHEMY_DATABASE_URL = os.getenv("AURORA_DATABASE_URL", "sqlite:///./aurora_tms.db")
 
 engine = create_engine(
     SQLALCHEMY_DATABASE_URL,
