@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Session
-from aurora_tms_mvp import ViagemService as LegacyViagemService
+from legacy.aurora_tms_mvp import ViagemService as LegacyViagemService
 
 
 class ViagemService:

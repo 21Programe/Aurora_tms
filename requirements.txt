@@ -7,3 +7,4 @@ plotly
 pandas
 requests
 python-multipart
+pytest

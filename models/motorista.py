@@ -1,3 +1,3 @@
-from legacy.aurora_tms_mvp import Caminhao
+from legacy.aurora_tms_mvp import Motorista
 
-__all__ = ["Caminhao"]
+__all__ = ["Motorista"]
