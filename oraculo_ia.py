@@ -298,7 +298,7 @@ class PastorSalmo23:
 
 
 if __name__ == "__main__":
-    from aurora_tms_mvp import SessionLocal
+    from legacy.aurora_tms_mvp import SessionLocal
     import json
 
     db = SessionLocal()
